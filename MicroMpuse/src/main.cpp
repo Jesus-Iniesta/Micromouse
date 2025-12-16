@@ -30,8 +30,23 @@
 #define SCL_PIN 22
 
 // ====== CONSTANTES ======
+// Dimensiones del laberinto y robot
+#define CELL_SIZE 170        // Tamaño de celda del laberinto (mm)
+#define ROBOT_WIDTH 70       // Ancho del robot (mm)
+#define ROBOT_LENGTH 100     // Largo del robot (mm)
+
+// Distancias objetivo para navegación (mm)
+#define WALL_FRONT_MIN 80    // Distancia mínima al frente antes de girar
+#define WALL_SIDE_TARGET 50  // Distancia objetivo a pared lateral (centrado)
+#define WALL_SIDE_MIN 35     // Distancia mínima a pared lateral
+#define WALL_SIDE_MAX 65     // Distancia máxima a pared lateral
+
+// Control de motores
 #define OFFSETA 1  // Offset motor A (ajustar según calibración)
 #define OFFSETB 1  // Offset motor B (ajustar según calibración)
+#define BASE_SPEED 120       // Velocidad base (0-255)
+#define TURN_SPEED 150       // Velocidad de giro
+#define CORRECTION_FACTOR 30 // Factor de corrección de trayectoria
 
 // Direcciones del multiplexor TCA9548A
 #define TCA_ADDRESS 0x70
@@ -248,43 +263,68 @@ void loop() {
         lastPrint = millis();
     }
     
-    // ====== LÓGICA BÁSICA DE NAVEGACIÓN ======
-    // Ajusta estos valores según tu laberinto (en mm)
-    const int WALL_THRESHOLD = 100;  // Distancia mínima a pared
-    const int BASE_SPEED = 100;      // Velocidad base (0-255)
+    // ====== LÓGICA DE NAVEGACIÓN OPTIMIZADA ======
     
-    // Algoritmo simple: seguir pared derecha
-    if (distanceFront < WALL_THRESHOLD) {
-        // Hay pared al frente, girar
+    // Detectar paredes
+    bool wallFront = (distanceFront < WALL_FRONT_MIN);
+    bool wallLeft = (distanceLeft < WALL_FRONT_MIN);
+    bool wallRight = (distanceRight < WALL_FRONT_MIN);
+    
+    if (wallFront) {
+        // Pared al frente - decidir dirección de giro
         stopMotors();
         delay(100);
         
-        if (distanceLeft > distanceRight) {
-            // Girar izquierda
-            turnLeft(150);
-            delay(400); // Ajustar para giro de 90 grados
+        // Prioridad: derecha (algoritmo mano derecha)
+        if (!wallRight) {
+            // Girar derecha 90°
+            turnRight(TURN_SPEED);
+            delay(350); // Calibrar este valor para giro exacto de 90°
+        } else if (!wallLeft) {
+            // Girar izquierda 90°
+            turnLeft(TURN_SPEED);
+            delay(350); // Calibrar este valor para giro exacto de 90°
         } else {
-            // Girar derecha
-            turnRight(150);
-            delay(400); // Ajustar para giro de 90 grados
+            // Callejón sin salida - girar 180°
+            turnRight(TURN_SPEED);
+            delay(700); // Calibrar para 180°
         }
         
         stopMotors();
         delay(100);
+        resetEncoders(); // Reiniciar contadores después del giro
+        
     } else {
-        // Avanzar con corrección por pared derecha
-        if (distanceRight < 80) {
-            // Muy cerca de pared derecha, corregir hacia izquierda
-            motorLeft.drive(BASE_SPEED - 20);
-            motorRight.drive(BASE_SPEED + 20);
-        } else if (distanceRight > 120) {
-            // Muy lejos de pared derecha, corregir hacia derecha
-            motorLeft.drive(BASE_SPEED + 20);
-            motorRight.drive(BASE_SPEED - 20);
-        } else {
-            // Distancia correcta, avanzar recto
-            moveForward(BASE_SPEED);
+        // No hay pared al frente - avanzar con corrección
+        
+        int speedLeft = BASE_SPEED;
+        int speedRight = BASE_SPEED;
+        
+        // Corrección proporcional basada en pared derecha (algoritmo mano derecha)
+        if (distanceRight < 200) { // Hay pared derecha detectada
+            int error = distanceRight - WALL_SIDE_TARGET;
+            int correction = constrain(error * 0.8, -CORRECTION_FACTOR, CORRECTION_FACTOR);
+            
+            // Aplicar corrección
+            speedLeft = BASE_SPEED + correction;
+            speedRight = BASE_SPEED - correction;
+            
+        } else if (distanceLeft < 200) { // No hay pared derecha, usar izquierda
+            int error = WALL_SIDE_TARGET - distanceLeft;
+            int correction = constrain(error * 0.8, -CORRECTION_FACTOR, CORRECTION_FACTOR);
+            
+            // Aplicar corrección
+            speedLeft = BASE_SPEED + correction;
+            speedRight = BASE_SPEED - correction;
         }
+        
+        // Limitar velocidades
+        speedLeft = constrain(speedLeft, 50, 200);
+        speedRight = constrain(speedRight, 50, 200);
+        
+        // Aplicar velocidades
+        motorLeft.drive(speedLeft);
+        motorRight.drive(speedRight);
     }
     
     delay(50);
