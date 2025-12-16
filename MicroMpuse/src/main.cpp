@@ -4,6 +4,8 @@
 #include <SparkFun_TB6612.h>
 #include <TCA9548.h>
 #include <ESP32Encoder.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
 
 // ====== CONFIGURACIÓN DE PINES ======
 // Motor A (Izquierdo) - TB6612FNG
@@ -20,173 +22,124 @@
 #define STBY 4
 
 // Encoders
-#define ENC_L_A 32  // Encoder izquierdo (Motor A) fase A
-#define ENC_L_B 33  // Encoder izquierdo (Motor A) fase B
-#define ENC_R_A 34  // Encoder derecho (Motor B) fase A
-#define ENC_R_B 35  // Encoder derecho (Motor B) fase B
+#define ENC_L_A 32
+#define ENC_L_B 33
+#define ENC_R_A 34
+#define ENC_R_B 35
 
 // I2C para sensores
 #define SDA_PIN 21
 #define SCL_PIN 22
 
+// ====== CONSTANTES WiFi ======
+const char* WIFI_SSID = "kali";      // <<<< CAMBIAR
+const char* WIFI_PASSWORD = "ben1010xzc";   // <<<< CAMBIAR
+const int UDP_PORT = 12345;
+
 // ====== CONSTANTES ======
-// Dimensiones del laberinto y robot
-#define CELL_SIZE 170        // Tamaño de celda del laberinto (mm)
-#define ROBOT_WIDTH 70       // Ancho del robot (mm)
-#define ROBOT_LENGTH 100     // Largo del robot (mm)
-
-// Distancias objetivo para navegación (mm)
-#define WALL_FRONT_MIN 80    // Distancia mínima al frente antes de girar
-#define WALL_SIDE_TARGET 50  // Distancia objetivo a pared lateral (centrado)
-#define WALL_SIDE_MIN 35     // Distancia mínima a pared lateral
-#define WALL_SIDE_MAX 65     // Distancia máxima a pared lateral
-
-// Control de motores
-#define OFFSETA 1  // Offset motor A (ajustar según calibración)
-#define OFFSETB 1  // Offset motor B (ajustar según calibración)
-#define BASE_SPEED 120       // Velocidad base (0-255)
-#define TURN_SPEED 150       // Velocidad de giro
-#define CORRECTION_FACTOR 30 // Factor de corrección de trayectoria
-
-// Direcciones del multiplexor TCA9548A
+#define CELL_SIZE 170
+#define ROBOT_WIDTH 70
+#define ROBOT_LENGTH 100
+#define WALL_FRONT_MIN 80
+#define WALL_SIDE_TARGET 50
+#define OFFSETA 1
+#define OFFSETB 1
+#define BASE_SPEED 120
+#define TURN_SPEED 150
 #define TCA_ADDRESS 0x70
-
-// Canales del multiplexor para cada sensor
-#define SENSOR_FRONT 3   // Sensor frontal en canal 3 (SC3, SD3)
-#define SENSOR_LEFT 1    // Sensor izquierdo en canal 1 (SC1, SD1)
-#define SENSOR_RIGHT 2   // Sensor derecho en canal 2 (SC2, SD2)
+#define SENSOR_FRONT 3
+#define SENSOR_LEFT 1
+#define SENSOR_RIGHT 2
 
 // ====== OBJETOS GLOBALES ======
-// Motores
 Motor motorLeft = Motor(AIN1, AIN2, PWMA, OFFSETA, STBY);
 Motor motorRight = Motor(BIN1, BIN2, PWMB, OFFSETB, STBY);
-
-// Multiplexor I2C
 TCA9548 multiplexor(TCA_ADDRESS);
+VL53L0X sensorFront, sensorLeft, sensorRight;
+ESP32Encoder encoderLeft, encoderRight;
+WiFiUDP udp;
 
-// Sensores VL53L0X
-VL53L0X sensorFront;
-VL53L0X sensorLeft;
-VL53L0X sensorRight;
+// ====== VARIABLES GLOBALES ======
+int distanceFront = 0, distanceLeft = 0, distanceRight = 0;
+long encoderLeftCount = 0, encoderRightCount = 0;
+String currentCommand = "";
+bool commandReady = false;
+bool executing = false;
+IPAddress clientIP;
+unsigned int clientPort = 0;
 
-// Encoders
-ESP32Encoder encoderLeft;
-ESP32Encoder encoderRight;
+// Mutex para sincronización
+SemaphoreHandle_t xMutex;
 
-// Variables para lecturas de sensores (en mm)
-int distanceFront = 0;
-int distanceLeft = 0;
-int distanceRight = 0;
+// ====== PROTOCOLO DE COMUNICACIÓN ======
+// Comandos recibidos:
+// FORWARD - Avanzar una celda
+// TURNL - Girar izquierda 90°
+// TURNR - Girar derecha 90°
+// TURNU - Girar 180°
+// STOP - Detener motores
+// STATUS - Obtener estado (sensores + encoders)
+// SENSORS - Obtener solo sensores
 
-// Variables para encoders
-long encoderLeftCount = 0;
-long encoderRightCount = 0;
+// Respuestas enviadas:
+// OK - Comando completado
+// BUSY - Robot ocupado ejecutando comando
+// STATUS:F,L,R,EL,ER - Estado completo
+// SENSORS:F,L,R - Solo sensores
+// READY - Robot listo
 
 // ====== FUNCIONES DE MULTIPLEXOR ======
 void selectMuxChannel(uint8_t channel) {
     if (channel > 7) return;
     multiplexor.selectChannel(channel);
-    delay(5); // Pequeña pausa para estabilizar
+    delay(5);
 }
 
 // ====== FUNCIONES DE SENSORES ======
 void initSensors() {
-    Serial.println("Inicializando sensores VL53L0X...");
-    
-    // Inicializar sensor frontal
+    Serial.println("Inicializando sensores...");
     selectMuxChannel(SENSOR_FRONT);
     if (sensorFront.init()) {
         sensorFront.setTimeout(500);
         sensorFront.startContinuous();
         Serial.println("Sensor frontal OK");
-    } else {
-        Serial.println("Error: Sensor frontal");
     }
-    
-    // Inicializar sensor izquierdo
     selectMuxChannel(SENSOR_LEFT);
     if (sensorLeft.init()) {
         sensorLeft.setTimeout(500);
         sensorLeft.startContinuous();
         Serial.println("Sensor izquierdo OK");
-    } else {
-        Serial.println("Error: Sensor izquierdo");
     }
-    
-    // Inicializar sensor derecho
     selectMuxChannel(SENSOR_RIGHT);
     if (sensorRight.init()) {
         sensorRight.setTimeout(500);
         sensorRight.startContinuous();
         Serial.println("Sensor derecho OK");
-    } else {
-        Serial.println("Error: Sensor derecho");
     }
 }
 
 void readSensors() {
-    // Leer sensor frontal
     selectMuxChannel(SENSOR_FRONT);
     distanceFront = sensorFront.readRangeContinuousMillimeters();
-    if (sensorFront.timeoutOccurred()) {
-        distanceFront = 8190; // Valor máximo si hay timeout
-    }
+    if (sensorFront.timeoutOccurred()) distanceFront = 8190;
     
-    // Leer sensor izquierdo
     selectMuxChannel(SENSOR_LEFT);
     distanceLeft = sensorLeft.readRangeContinuousMillimeters();
-    if (sensorLeft.timeoutOccurred()) {
-        distanceLeft = 8190;
-    }
+    if (sensorLeft.timeoutOccurred()) distanceLeft = 8190;
     
-    // Leer sensor derecho
     selectMuxChannel(SENSOR_RIGHT);
     distanceRight = sensorRight.readRangeContinuousMillimeters();
-    if (sensorRight.timeoutOccurred()) {
-        distanceRight = 8190;
-    }
-}
-
-// ====== FUNCIONES DE MOTORES ======
-void stopMotors() {
-    motorLeft.brake();
-    motorRight.brake();
-}
-
-void moveForward(int speed) {
-    motorLeft.drive(speed);
-    motorRight.drive(speed);
-}
-
-void moveBackward(int speed) {
-    motorLeft.drive(-speed);
-    motorRight.drive(-speed);
-}
-
-void turnLeft(int speed) {
-    motorLeft.drive(-speed);
-    motorRight.drive(speed);
-}
-
-void turnRight(int speed) {
-    motorLeft.drive(speed);
-    motorRight.drive(-speed);
+    if (sensorRight.timeoutOccurred()) distanceRight = 8190;
 }
 
 // ====== FUNCIONES DE ENCODERS ======
 void initEncoders() {
     Serial.println("Inicializando encoders...");
-    
-    // Configurar encoder izquierdo
     ESP32Encoder::useInternalWeakPullResistors = puType::up;
     encoderLeft.attachHalfQuad(ENC_L_A, ENC_L_B);
-    encoderLeft.setCount(0);
-    
-    // Configurar encoder derecho
     encoderRight.attachHalfQuad(ENC_R_A, ENC_R_B);
+    encoderLeft.setCount(0);
     encoderRight.setCount(0);
-    
-    Serial.println("Encoders inicializados");
 }
 
 void readEncoders() {
@@ -201,38 +154,256 @@ void resetEncoders() {
     encoderRightCount = 0;
 }
 
-// ====== FUNCIONES DE DIAGNÓSTICO ======
-void printSensorData() {
-    Serial.print("Front: ");
-    Serial.print(distanceFront);
-    Serial.print(" mm | Left: ");
-    Serial.print(distanceLeft);
-    Serial.print(" mm | Right: ");
-    Serial.print(distanceRight);
-    Serial.println(" mm");
+// ====== FUNCIONES DE MOTORES (PRIMITIVAS) ======
+void stopMotors() {
+    motorLeft.brake();
+    motorRight.brake();
 }
 
-void printEncoderData() {
-    Serial.print("Enc Left: ");
-    Serial.print(encoderLeftCount);
-    Serial.print(" | Enc Right: ");
-    Serial.println(encoderRightCount);
+void moveForward(int speed) {
+    motorLeft.drive(speed);
+    motorRight.drive(speed);
+}
+
+void turnLeft(int speed) {
+    motorLeft.drive(-speed);
+    motorRight.drive(speed);
+}
+
+void turnRight(int speed) {
+    motorLeft.drive(speed);
+    motorRight.drive(-speed);
+}
+
+// ====== PRIMITIVAS DE MOVIMIENTO ======
+void primitiveForward() {
+    Serial.println("Ejecutando: FORWARD");
+    resetEncoders();
+    
+    // Avanzar aproximadamente una celda (ajustar según calibración)
+    // Usar encoders para medir distancia
+    long targetCounts = 1000; // Calibrar este valor
+    
+    while (abs(encoderLeftCount) < targetCounts) {
+        readEncoders();
+        readSensors();
+        
+        // Corrección básica mientras avanza
+        int speedL = BASE_SPEED;
+        int speedR = BASE_SPEED;
+        
+        if (distanceRight < 200) {
+            int error = distanceRight - WALL_SIDE_TARGET;
+            int corr = constrain(error, -20, 20);
+            speedL += corr;
+            speedR -= corr;
+        }
+        
+        moveForward((speedL + speedR) / 2);
+        delay(10);
+    }
+    
+    stopMotors();
+    delay(100);
+}
+
+void primitiveTurnLeft() {
+    Serial.println("Ejecutando: TURN LEFT");
+    stopMotors();
+    delay(100);
+    
+    turnLeft(TURN_SPEED);
+    delay(350); // Calibrar para 90° exactos
+    
+    stopMotors();
+    delay(100);
+    resetEncoders();
+}
+
+void primitiveTurnRight() {
+    Serial.println("Ejecutando: TURN RIGHT");
+    stopMotors();
+    delay(100);
+    
+    turnRight(TURN_SPEED);
+    delay(350); // Calibrar para 90° exactos
+    
+    stopMotors();
+    delay(100);
+    resetEncoders();
+}
+
+void primitiveTurnAround() {
+    Serial.println("Ejecutando: TURN AROUND (180°)");
+    stopMotors();
+    delay(100);
+    
+    turnRight(TURN_SPEED);
+    delay(700); // Calibrar para 180° exactos
+    
+    stopMotors();
+    delay(100);
+    resetEncoders();
+}
+
+// ====== FUNCIONES WiFi ======
+void initWiFi() {
+    Serial.print("Conectando a WiFi: ");
+    Serial.println(WIFI_SSID);
+    
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+        delay(500);
+        Serial.print(".");
+        attempts++;
+    }
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\n¡WiFi conectado!");
+        Serial.print("IP: ");
+        Serial.println(WiFi.localIP());
+        
+        udp.begin(UDP_PORT);
+        Serial.print("UDP escuchando en puerto: ");
+        Serial.println(UDP_PORT);
+    } else {
+        Serial.println("\nError: No se pudo conectar a WiFi");
+    }
+}
+
+void sendResponse(String response) {
+    if (clientPort > 0) {
+        udp.beginPacket(clientIP, clientPort);
+        udp.print(response);
+        udp.endPacket();
+        Serial.print("Enviado: ");
+        Serial.println(response);
+    }
+}
+
+// ====== TAREA DE COMUNICACIÓN WiFi (FreeRTOS) ======
+void taskCommunication(void *pvParameters) {
+    Serial.println("Tarea de comunicación iniciada");
+    
+    while (true) {
+        int packetSize = udp.parsePacket();
+        
+        if (packetSize) {
+            clientIP = udp.remoteIP();
+            clientPort = udp.remotePort();
+            
+            char incomingPacket[255];
+            int len = udp.read(incomingPacket, 255);
+            if (len > 0) {
+                incomingPacket[len] = 0;
+            }
+            
+            String command = String(incomingPacket);
+            command.trim();
+            
+            Serial.print("Recibido: ");
+            Serial.println(command);
+            
+            // Procesar comandos
+            if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
+                if (command == "STATUS") {
+                    readSensors();
+                    readEncoders();
+                    String status = "STATUS:" + 
+                                  String(distanceFront) + "," +
+                                  String(distanceLeft) + "," +
+                                  String(distanceRight) + "," +
+                                  String(encoderLeftCount) + "," +
+                                  String(encoderRightCount);
+                    sendResponse(status);
+                    
+                } else if (command == "SENSORS") {
+                    readSensors();
+                    String sensors = "SENSORS:" + 
+                                   String(distanceFront) + "," +
+                                   String(distanceLeft) + "," +
+                                   String(distanceRight);
+                    sendResponse(sensors);
+                    
+                } else if (executing) {
+                    sendResponse("BUSY");
+                    
+                } else if (command == "FORWARD" || command == "TURNL" || 
+                          command == "TURNR" || command == "TURNU" || 
+                          command == "STOP") {
+                    currentCommand = command;
+                    commandReady = true;
+                    sendResponse("ACK");
+                }
+                
+                xSemaphoreGive(xMutex);
+            }
+        }
+        
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+}
+
+// ====== TAREA DE EJECUCIÓN DE MOVIMIENTOS (FreeRTOS) ======
+void taskExecution(void *pvParameters) {
+    Serial.println("Tarea de ejecución iniciada");
+    
+    while (true) {
+        if (commandReady) {
+            if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
+                executing = true;
+                String cmd = currentCommand;
+                commandReady = false;
+                xSemaphoreGive(xMutex);
+                
+                // Ejecutar comando
+                if (cmd == "FORWARD") {
+                    primitiveForward();
+                } else if (cmd == "TURNL") {
+                    primitiveTurnLeft();
+                } else if (cmd == "TURNR") {
+                    primitiveTurnRight();
+                } else if (cmd == "TURNU") {
+                    primitiveTurnAround();
+                } else if (cmd == "STOP") {
+                    stopMotors();
+                }
+                
+                // Marcar como completado
+                if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
+                    executing = false;
+                    xSemaphoreGive(xMutex);
+                }
+                
+                sendResponse("OK");
+            }
+        }
+        
+        vTaskDelay(50 / portTICK_PERIOD_MS);
+    }
 }
 
 // ====== SETUP ======
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    Serial.println("Robot Laberinto - Inicializando...");
+    Serial.println("\n=================================");
+    Serial.println("Robot Micromouse - Control WiFi");
+    Serial.println("=================================\n");
+    
+    // Crear mutex
+    xMutex = xSemaphoreCreateMutex();
     
     // Inicializar I2C
     Wire.begin(SDA_PIN, SCL_PIN);
-    Wire.setClock(400000); // 400kHz I2C
+    Wire.setClock(400000);
     Serial.println("I2C inicializado");
     
     // Inicializar multiplexor
     multiplexor.begin();
-    Serial.println("Multiplexor TCA9548A inicializado");
+    Serial.println("Multiplexor inicializado");
     
     // Inicializar sensores
     initSensors();
@@ -240,92 +411,54 @@ void setup() {
     // Inicializar encoders
     initEncoders();
     
-    // Pequeña pausa antes de comenzar
-    delay(1000);
+    // Inicializar WiFi
+    initWiFi();
+    
+    // Detener motores
     stopMotors();
     
-    Serial.println("¡Sistema listo!");
-    Serial.println("Esperando 3 segundos antes de comenzar...");
-    delay(3000);
+    Serial.println("\n¡Sistema listo!");
+    
+    // Enviar mensaje de READY por broadcast
+    delay(2000);
+    sendResponse("READY");
+    
+    // Crear tareas FreeRTOS
+    xTaskCreatePinnedToCore(
+        taskCommunication,
+        "Communication",
+        4096,
+        NULL,
+        2,
+        NULL,
+        0
+    );
+    
+    xTaskCreatePinnedToCore(
+        taskExecution,
+        "Execution",
+        4096,
+        NULL,
+        1,
+        NULL,
+        1
+    );
+    
+    Serial.println("Tareas FreeRTOS creadas");
 }
 
 // ====== LOOP PRINCIPAL ======
 void loop() {
-    // Leer sensores
-    readSensors();
-    readEncoders();
+    // El loop principal está libre
+    // Las tareas FreeRTOS manejan todo
+    delay(1000);
     
-    // Mostrar información (comentar para mejorar performance)
-    static unsigned long lastPrint = 0;
-    if (millis() - lastPrint > 500) {
-        printSensorData();
-        printEncoderData();
-        lastPrint = millis();
-    }
-    
-    // ====== LÓGICA DE NAVEGACIÓN OPTIMIZADA ======
-    
-    // Detectar paredes
-    bool wallFront = (distanceFront < WALL_FRONT_MIN);
-    bool wallLeft = (distanceLeft < WALL_FRONT_MIN);
-    bool wallRight = (distanceRight < WALL_FRONT_MIN);
-    
-    if (wallFront) {
-        // Pared al frente - decidir dirección de giro
-        stopMotors();
-        delay(100);
-        
-        // Prioridad: derecha (algoritmo mano derecha)
-        if (!wallRight) {
-            // Girar derecha 90°
-            turnRight(TURN_SPEED);
-            delay(350); // Calibrar este valor para giro exacto de 90°
-        } else if (!wallLeft) {
-            // Girar izquierda 90°
-            turnLeft(TURN_SPEED);
-            delay(350); // Calibrar este valor para giro exacto de 90°
-        } else {
-            // Callejón sin salida - girar 180°
-            turnRight(TURN_SPEED);
-            delay(700); // Calibrar para 180°
-        }
-        
-        stopMotors();
-        delay(100);
-        resetEncoders(); // Reiniciar contadores después del giro
-        
+    // Mostrar info de debug
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.print("WiFi OK | IP: ");
+        Serial.println(WiFi.localIP());
     } else {
-        // No hay pared al frente - avanzar con corrección
-        
-        int speedLeft = BASE_SPEED;
-        int speedRight = BASE_SPEED;
-        
-        // Corrección proporcional basada en pared derecha (algoritmo mano derecha)
-        if (distanceRight < 200) { // Hay pared derecha detectada
-            int error = distanceRight - WALL_SIDE_TARGET;
-            int correction = constrain(error * 0.8, -CORRECTION_FACTOR, CORRECTION_FACTOR);
-            
-            // Aplicar corrección
-            speedLeft = BASE_SPEED + correction;
-            speedRight = BASE_SPEED - correction;
-            
-        } else if (distanceLeft < 200) { // No hay pared derecha, usar izquierda
-            int error = WALL_SIDE_TARGET - distanceLeft;
-            int correction = constrain(error * 0.8, -CORRECTION_FACTOR, CORRECTION_FACTOR);
-            
-            // Aplicar corrección
-            speedLeft = BASE_SPEED + correction;
-            speedRight = BASE_SPEED - correction;
-        }
-        
-        // Limitar velocidades
-        speedLeft = constrain(speedLeft, 50, 200);
-        speedRight = constrain(speedRight, 50, 200);
-        
-        // Aplicar velocidades
-        motorLeft.drive(speedLeft);
-        motorRight.drive(speedRight);
+        Serial.println("WiFi desconectado - Reintentando...");
+        initWiFi();
     }
-    
-    delay(50);
 }
