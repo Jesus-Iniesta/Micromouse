@@ -13,13 +13,20 @@ Sistema completo de control para robot micromouse con comunicación WiFi, algori
 - ✅ Primitivas de movimiento (Forward, TurnLeft, TurnRight, TurnAround)
 
 ### Interfaz Gráfica (PC)
-- ✅ Visualización en tiempo real del laberinto 16×16
+- ✅ Visualización en tiempo real del laberinto 12×7
 - ✅ Algoritmo Flood Fill para navegación óptima
 - ✅ Mapa actualizado dinámicamente según detección de paredes
 - ✅ Control remoto del robot
 - ✅ Monitoreo de sensores en tiempo real
 - ✅ Log de actividades
 - ✅ Diseño moderno con tema oscuro
+
+### Especificaciones del Laberinto
+- **Dimensiones**: 12 columnas × 7 filas
+- **Tamaño de celda**: 16cm × 16cm (160mm × 160mm)
+- **Robot**: 7cm ancho × 10cm largo
+- **Inicio**: Esquina inferior izquierda (0, 0)
+- **Meta**: Centro del laberinto (5, 3)
 
 ## 🔧 Configuración
 

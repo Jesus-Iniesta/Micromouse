@@ -14,9 +14,11 @@ from collections import deque
 # ====== CONSTANTES ======
 ROBOT_IP = "192.168.1.100"  # <<<< CAMBIAR a la IP del ESP32
 ROBOT_PORT = 12345
-MAZE_SIZE = 16  # Laberinto 16x16
-CELL_SIZE = 40  # Tamaño de celda en píxeles para visualización
-TARGET_X, TARGET_Y = 7, 7  # Centro del laberinto (meta)
+MAZE_COLS = 12  # Laberinto 12 columnas
+MAZE_ROWS = 7   # Laberinto 7 filas
+CELL_SIZE = 50  # Tamaño de celda en píxeles para visualización
+CELL_SIZE_MM = 160  # Tamaño real de celda en mm (16cm × 16cm)
+TARGET_X, TARGET_Y = 5, 3  # Centro del laberinto (meta)
 
 # Direcciones
 NORTH, EAST, SOUTH, WEST = 0, 1, 2, 3
@@ -33,22 +35,23 @@ class MazeCell:
 
 class FloodFill:
     """Algoritmo Flood Fill para resolver el laberinto"""
-    def __init__(self, size, target_x, target_y):
-        self.size = size
+    def __init__(self, cols, rows, target_x, target_y):
+        self.cols = cols  # Columnas (ancho)
+        self.rows = rows  # Filas (alto)
         self.target_x = target_x
         self.target_y = target_y
-        self.maze = [[MazeCell() for _ in range(size)] for _ in range(size)]
+        self.maze = [[MazeCell() for _ in range(rows)] for _ in range(cols)]
         
-        # Inicializar sin paredes externas conocidas
-        for x in range(size):
-            for y in range(size):
+        # Inicializar paredes externas
+        for x in range(cols):
+            for y in range(rows):
                 if x == 0:
                     self.maze[x][y].walls['W'] = True
-                if x == size - 1:
+                if x == cols - 1:
                     self.maze[x][y].walls['E'] = True
                 if y == 0:
                     self.maze[x][y].walls['S'] = True
-                if y == size - 1:
+                if y == rows - 1:
                     self.maze[x][y].walls['N'] = True
         
         self.calculate_distances()
@@ -56,8 +59,8 @@ class FloodFill:
     def calculate_distances(self):
         """Calcula distancias Manhattan desde la meta usando BFS"""
         # Reiniciar distancias
-        for x in range(self.size):
-            for y in range(self.size):
+        for x in range(self.cols):
+            for y in range(self.rows):
                 self.maze[x][y].distance = 999
         
         # BFS desde la meta
@@ -78,7 +81,7 @@ class FloodFill:
             ]
             
             for nx, ny, wall_dir in neighbors:
-                if 0 <= nx < self.size and 0 <= ny < self.size:
+                if 0 <= nx < self.cols and 0 <= ny < self.rows:
                     if not self.maze[x][y].walls[wall_dir]:
                         if self.maze[nx][ny].distance > current_dist + 1:
                             self.maze[nx][ny].distance = current_dist + 1
@@ -119,7 +122,7 @@ class FloodFill:
             abs_dir = mapping[wall_dir]
             if abs_dir in adjacent:
                 ax, ay, opposite = adjacent[abs_dir]
-                if 0 <= ax < self.size and 0 <= ay < self.size:
+                if 0 <= ax < self.cols and 0 <= ay < self.rows:
                     self.maze[ax][ay].walls[opposite] = self.maze[x][y].walls[abs_dir]
         
         # Marcar como visitada
@@ -149,7 +152,7 @@ class FloodFill:
             nx, ny = x + dx, y + dy
             
             # Verificar si es válido
-            if 0 <= nx < self.size and 0 <= ny < self.size:
+            if 0 <= nx < self.cols and 0 <= ny < self.rows:
                 wall_map = {0: 'N', 1: 'E', 2: 'S', 3: 'W'}
                 if not self.maze[x][y].walls[wall_map[new_dir]]:
                     if self.maze[nx][ny].distance < best_dist:
@@ -225,7 +228,7 @@ class MicromouseGUI:
         self.robot_x = 0
         self.robot_y = 0
         self.robot_dir = NORTH
-        self.flood_fill = FloodFill(MAZE_SIZE, TARGET_X, TARGET_Y)
+        self.flood_fill = FloodFill(MAZE_COLS, MAZE_ROWS, TARGET_X, TARGET_Y)
         self.robot_controller = RobotController(ROBOT_IP, ROBOT_PORT)
         self.running = False
         self.paused = False
@@ -283,8 +286,8 @@ class MicromouseGUI:
         canvas_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
         self.canvas = tk.Canvas(canvas_frame, bg='#1a1a2e', 
-                               width=MAZE_SIZE*CELL_SIZE+20, 
-                               height=MAZE_SIZE*CELL_SIZE+20,
+                               width=MAZE_COLS*CELL_SIZE+20, 
+                               height=MAZE_ROWS*CELL_SIZE+20,
                                highlightthickness=2,
                                highlightbackground='#7aa2f7')
         self.canvas.pack()
@@ -382,13 +385,13 @@ class MicromouseGUI:
         
         offset = 10
         
-        for x in range(MAZE_SIZE):
-            for y in range(MAZE_SIZE):
+        for x in range(MAZE_COLS):
+            for y in range(MAZE_ROWS):
                 cell = self.flood_fill.maze[x][y]
                 
                 # Coordenadas (invertir Y para que (0,0) esté abajo-izquierda)
                 cx = offset + x * CELL_SIZE
-                cy = offset + (MAZE_SIZE - 1 - y) * CELL_SIZE
+                cy = offset + (MAZE_ROWS - 1 - y) * CELL_SIZE
                 
                 # Color de fondo
                 if (x, y) == (TARGET_X, TARGET_Y):
@@ -427,7 +430,7 @@ class MicromouseGUI:
         
         # Dibujar robot
         rx = offset + self.robot_x * CELL_SIZE + CELL_SIZE // 2
-        ry = offset + (MAZE_SIZE - 1 - self.robot_y) * CELL_SIZE + CELL_SIZE // 2
+        ry = offset + (MAZE_ROWS - 1 - self.robot_y) * CELL_SIZE + CELL_SIZE // 2
         
         # Triángulo apuntando en la dirección
         arrow_angles = [90, 0, 270, 180]  # Norte, Este, Sur, Oeste
@@ -510,7 +513,7 @@ class MicromouseGUI:
         self.robot_x = 0
         self.robot_y = 0
         self.robot_dir = NORTH
-        self.flood_fill = FloodFill(MAZE_SIZE, TARGET_X, TARGET_Y)
+        self.flood_fill = FloodFill(MAZE_COLS, MAZE_ROWS, TARGET_X, TARGET_Y)
         self.draw_maze()
         self.update_info()
         self.log("🔄 Mapa reiniciado")

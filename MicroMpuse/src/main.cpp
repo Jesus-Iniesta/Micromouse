@@ -37,9 +37,11 @@ const char* WIFI_PASSWORD = "ben1010xzc";   // <<<< CAMBIAR
 const int UDP_PORT = 12345;
 
 // ====== CONSTANTES ======
-#define CELL_SIZE 170
-#define ROBOT_WIDTH 70
-#define ROBOT_LENGTH 100
+#define CELL_SIZE 160        // Tamaño de celda: 16cm × 16cm
+#define MAZE_COLS 12         // 12 columnas
+#define MAZE_ROWS 7          // 7 filas
+#define ROBOT_WIDTH 70       // Ancho del robot: 7cm
+#define ROBOT_LENGTH 100     // Largo del robot: 10cm
 #define WALL_FRONT_MIN 80
 #define WALL_SIDE_TARGET 50
 #define OFFSETA 1

@@ -11,11 +11,11 @@ El robot es controlado completamente desde la computadora mediante **WiFi (UDP)*
 - Muestra una interfaz gráfica en tiempo real
 
 ### Especificaciones del Laberinto
-- Matriz: **16 × 16 celdas**
-- Tamaño de celda: **170 mm × 170 mm**
-- Robot: **70mm ancho × 100mm largo**
+- Matriz: **12 columnas × 7 filas**
+- Tamaño de celda: **160 mm × 160 mm (16cm × 16cm)**
+- Robot: **70mm ancho × 100mm largo (7cm × 10cm)**
 - Inicio: Esquina inferior izquierda (0, 0)
-- Objetivo: Centro del laberinto (7, 7)
+- Objetivo: Centro del laberinto (5, 3)
 
 ## Estructura de Archivos
 
@@ -117,7 +117,7 @@ python interfaz_grafica.py
 
 | Comando | Descripción |
 |---------|-------------|
-| `FORWARD` | Avanzar una celda (170 mm) |
+| `FORWARD` | Avanzar una celda (160 mm) |
 | `TURNL` | Girar 90° a la izquierda |
 | `TURNR` | Girar 90° a la derecha |
 | `TURNU` | Girar 180° |
@@ -143,11 +143,11 @@ python interfaz_grafica.py
 ## Interfaz Gráfica
 
 La interfaz muestra:
-- **Matriz 16×16** del laberinto
+- **Matriz 12×7** del laberinto
 - **Paredes detectadas** (líneas blancas)
 - **Robot** (círculo rojo con flecha de dirección)
 - **Celdas visitadas** (gris oscuro)
-- **Objetivo** (verde - centro 7,7)
+- **Objetivo** (verde - centro 5,3)
 - **Distancias Flood Fill** (números azules en cada celda)
 - **Información en tiempo real** (posición, dirección, sensores)
 - **Log de actividades**
@@ -282,8 +282,9 @@ ROBOT_PORT = 12345
 
 En `interfaz_grafica.py`:
 ```python
-MAZE_SIZE = 16  # Cambiar tamaño
-TARGET_X, TARGET_Y = 7, 7  # Cambiar posición de meta
+MAZE_COLS = 12  # Cambiar número de columnas
+MAZE_ROWS = 7   # Cambiar número de filas
+TARGET_X, TARGET_Y = 5, 3  # Cambiar posición de meta
 ```
 
 ### Ajustar umbral de detección de paredes
