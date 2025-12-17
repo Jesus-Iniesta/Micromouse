@@ -1,29 +1,27 @@
-# Sistema de Comunicación y Control - Micromouse
+# Sistema de Control WiFi - Micromouse
 
-Este módulo contiene el sistema de control desde computadora para el robot Micromouse con algoritmo Flood Fill.
+Este módulo contiene la interfaz gráfica para control del robot Micromouse con algoritmo Flood Fill mediante comunicación WiFi.
 
 ## Descripción del Sistema
 
-El robot es controlado completamente desde la computadora. El ESP32 solo ejecuta primitivas de movimiento y lee los sensores, mientras que la computadora:
+El robot es controlado completamente desde la computadora mediante **WiFi (UDP)**. El ESP32 ejecuta primitivas de movimiento y lee los sensores, mientras que la computadora:
 - Calcula el siguiente movimiento usando Flood Fill
 - Procesa los datos de los sensores
 - Construye el mapa del laberinto
 - Muestra una interfaz gráfica en tiempo real
 
 ### Especificaciones del Laberinto
-- Matriz: **12 columnas × 7 filas**
-- Tamaño de celda: **160 mm × 160 mm**
-- Inicio: Esquina inferior izquierda (6, 0)
-- Objetivo: Centro del laberinto (4 celdas centrales)
+- Matriz: **16 × 16 celdas**
+- Tamaño de celda: **170 mm × 170 mm**
+- Robot: **70mm ancho × 100mm largo**
+- Inicio: Esquina inferior izquierda (0, 0)
+- Objetivo: Centro del laberinto (7, 7)
 
 ## Estructura de Archivos
 
 ```
 comunicacion/
-├── protocolo_serial.py      # Comunicación serial ESP32-PC
-├── flood_fill.py            # Algoritmo Flood Fill
-├── interfaz_grafica.py      # Interfaz gráfica con Pygame
-├── main_control.py          # Programa principal
+├── interfaz_grafica.py      # Interfaz gráfica con Tkinter + Flood Fill + WiFi
 ├── requirements.txt         # Dependencias Python
 └── README.md               # Este archivo
 ```
@@ -46,204 +44,292 @@ source venv/bin/activate  # Linux/Mac
 venv\Scripts\activate  # Windows
 ```
 
-### 3. Instalar dependencias
+## Instalación
+
+### 1. Instalar Python 3.8 o superior
 
 ```bash
-pip install -r requirements.txt
+python3 --version
+```
+
+### 2. Instalar dependencias
+
+```bash
+pip install tkinter  # Viene incluido con Python en la mayoría de sistemas
 ```
 
 ## Uso
 
-### 1. Conectar el ESP32
+### 1. Configurar WiFi en el ESP32
 
-Conecta el ESP32 a la computadora vía USB. Identifica el puerto:
+Edita `src/main.cpp` y configura tu red WiFi:
 
-**Linux/Mac:**
-```bash
-ls /dev/tty* | grep -E "(USB|ACM)"
-# Generalmente: /dev/ttyUSB0 o /dev/ttyACM0
+```cpp
+const char* WIFI_SSID = "TU_RED_WIFI";
+const char* WIFI_PASSWORD = "TU_PASSWORD";
 ```
 
-**Windows:**
-- Abrir "Administrador de dispositivos"
-- Buscar en "Puertos (COM y LPT)"
-- Anotar el puerto (ej: COM3, COM4)
+### 2. Compilar y subir código al ESP32
 
-### 2. Configurar el puerto
+```bash
+platformio run --target upload
+```
 
-Edita `main_control.py` y ajusta el puerto:
+### 3. Obtener la IP del ESP32
+
+Abre el monitor serial:
+
+```bash
+platformio device monitor
+```
+
+Verás algo como:
+```
+¡WiFi conectado!
+IP: 192.168.1.XXX
+```
+
+### 4. Configurar la IP en la interfaz
+
+Edita `interfaz_grafica.py` en la línea 15:
 
 ```python
-puerto = '/dev/ttyUSB0'  # Linux/Mac
-# o
-puerto = 'COM3'  # Windows
+ROBOT_IP = "192.168.1.XXX"  # IP del ESP32
 ```
 
-### 3. Ejecutar el programa
+### 5. Ejecutar la interfaz gráfica
 
 ```bash
-python main_control.py
+python interfaz_grafica.py
 ```
 
-### 4. Opciones del menú
+### 6. Usar la interfaz
 
-1. **Explorar laberinto (automático)**: El robot explora usando Flood Fill
-2. **Modo manual**: Control manual para pruebas (F=avanzar, L=izquierda, R=derecha)
-3. **Leer sensores**: Lee y muestra datos de sensores
-4. **Calibrar robot**: Calibra la posición del robot
-5. **Salir**: Cierra el programa
+1. **Conectar** - Establece conexión WiFi con el robot
+2. **Iniciar Exploración** - El robot explora automáticamente con Flood Fill
+3. **Pausar** - Pausa/reanuda la exploración
+4. **Detener** - Detiene el robot
+5. **Reiniciar Mapa** - Limpia el mapa y reinicia posición
 
-## Protocolo de Comunicación
+## Protocolo de Comunicación WiFi (UDP)
 
 ### Comandos enviados al ESP32
 
 | Comando | Descripción |
 |---------|-------------|
-| `F` | Avanzar una celda (160 mm) |
-| `B` | Retroceder una celda |
-| `L` | Girar 90° a la izquierda |
-| `R` | Girar 90° a la derecha |
-| `S` | Leer sensores |
-| `X` | Detener motores |
-| `C` | Calibrar posición |
+| `FORWARD` | Avanzar una celda (170 mm) |
+| `TURNL` | Girar 90° a la izquierda |
+| `TURNR` | Girar 90° a la derecha |
+| `TURNU` | Girar 180° |
+| `STOP` | Detener motores |
+| `STATUS` | Obtener estado completo |
+| `SENSORS` | Obtener lecturas de sensores |
 
 ### Respuestas del ESP32
 
 | Respuesta | Descripción |
 |-----------|-------------|
-| `OK` | Comando ejecutado correctamente |
-| `ERROR` | Error al ejecutar comando |
-| `SENS:F=123,L=456,R=789` | Lecturas de sensores en mm |
+| `ACK` | Comando recibido, iniciando ejecución |
+| `OK` | Comando completado exitosamente |
+| `BUSY` | Robot ocupado ejecutando comando |
+| `STATUS:F,L,R,EL,ER` | Estado: Front, Left, Right, EncoderLeft, EncoderRight |
+| `SENSORS:F,L,R` | Sensores en mm: Front, Left, Right |
+| `READY` | Robot listo |
+| `B` | Retroceder una celda |
+| `L` | Girar 90° a la izquierda |
+| `R` | Girar 90° a la derecha |
+
 
 ## Interfaz Gráfica
 
 La interfaz muestra:
-- **Matriz 12×7** del laberinto
-- **Paredes detectadas** (líneas negras)
+- **Matriz 16×16** del laberinto
+- **Paredes detectadas** (líneas blancas)
 - **Robot** (círculo rojo con flecha de dirección)
-- **Celdas visitadas** (verde claro)
-- **Objetivo** (dorado)
-- **Distancias Flood Fill** (números en cada celda)
-- **Información de estado** (posición, dirección, fase)
+- **Celdas visitadas** (gris oscuro)
+- **Objetivo** (verde - centro 7,7)
+- **Distancias Flood Fill** (números azules en cada celda)
+- **Información en tiempo real** (posición, dirección, sensores)
+- **Log de actividades**
 
 ### Colores
 
-- 🟥 **Rojo**: Robot
-- 🟨 **Dorado**: Objetivo
-- 🟩 **Verde claro**: Celdas visitadas
-- ⬜ **Gris claro**: Celdas no visitadas
-- ⬛ **Negro**: Paredes
+- 🔴 **Rojo**: Robot
+- 🟢 **Verde**: Objetivo (centro)
+- 🔵 **Números azules**: Distancias Flood Fill
+- ⬛ **Gris oscuro**: Celdas visitadas
+- ⬛ **Gris muy oscuro**: Celdas no visitadas
+- ⬜ **Blanco**: Paredes detectadas
 
 ## Algoritmo Flood Fill
 
-El algoritmo:
-1. Calcula distancias desde cada celda al objetivo
-2. El robot siempre se mueve a la celda vecina con menor distancia
-3. Actualiza el mapa cuando detecta paredes
-4. Recalcula distancias después de cada actualización
+El algoritmo implementado:
+1. Inicializa distancias desde la meta usando BFS (Breadth-First Search)
+2. El robot explora detectando paredes con sensores
+3. Actualiza el mapa en tiempo real
+4. Recalcula distancias cuando detecta nuevas paredes
+5. Siempre se mueve a la celda vecina con menor distancia
+6. Considera paredes para determinar movimientos válidos
 
-## Modificación del Código del ESP32
+## Arquitectura del Sistema
 
-El ESP32 debe implementar el protocolo de comandos. Agrega este código al inicio del `loop()`:
+### ESP32 - FreeRTOS
+```
+┌─────────────────────────────┐
+│  Tarea Comunicación (Core 0)│
+│  - Recibir comandos UDP     │
+│  - Enviar respuestas        │
+│  - No bloquea ejecución     │
+└─────────────────────────────┘
+           ↕ Mutex
+┌─────────────────────────────┐
+│  Tarea Ejecución (Core 1)   │
+│  - Ejecutar primitivas      │
+│  - Leer sensores            │
+│  - Control de motores       │
+└─────────────────────────────┘
+```
+
+### Interfaz Python
+```
+┌────────────────────────┐
+│   Interfaz Tkinter     │
+│   (Thread Principal)   │
+└────────┬───────────────┘
+         │
+         ↓
+┌────────────────────────┐
+│  Thread Exploración    │
+│  - Algoritmo Flood Fill│
+│  - Control del robot   │
+│  - Actualización UI    │
+└────────┬───────────────┘
+         │
+         ↓
+┌────────────────────────┐
+│  Robot Controller      │
+│  - Socket UDP          │
+│  - Protocolo WiFi      │
+└────────────────────────┘
+```
+
+## Calibración
+
+### Valores a ajustar en el ESP32 (`src/main.cpp`):
 
 ```cpp
-void loop() {
-    // Leer comando serial
-    if (Serial.available() > 0) {
-        char comando = Serial.read();
-        
-        switch(comando) {
-            case 'F':
-                avanzar_una_celda();
-                Serial.println("OK");
-                break;
-            case 'L':
-                girar_izquierda_90();
-                Serial.println("OK");
-                break;
-            case 'R':
-                girar_derecha_90();
-                Serial.println("OK");
-                break;
-            case 'S':
-                leer_y_enviar_sensores();
-                break;
-            case 'X':
-                detener_motores();
-                Serial.println("OK");
-                break;
-            case 'C':
-                calibrar_posicion();
-                Serial.println("OK");
-                break;
-        }
-    }
-}
+// Tiempos de giro (dependen de tu robot)
+delay(350);  // Para giro de 90° - CALIBRAR
+delay(700);  // Para giro de 180° - CALIBRAR
 
-void leer_y_enviar_sensores() {
-    // Leer sensores VL53L0X
-    int frontal = leerSensorFrontal();
-    int izquierdo = leerSensorIzquierdo();
-    int derecho = leerSensorDerecho();
-    
-    // Enviar en formato: SENS:F=123,L=456,R=789
-    Serial.print("SENS:F=");
-    Serial.print(frontal);
-    Serial.print(",L=");
-    Serial.print(izquierdo);
-    Serial.print(",R=");
-    Serial.println(derecho);
-}
+// Distancia de avance
+long targetCounts = 1000;  // Pulsos del encoder para una celda - CALIBRAR
+
+// Velocidades
+#define BASE_SPEED 120     // Velocidad de avance - AJUSTAR
+#define TURN_SPEED 150     // Velocidad de giro - AJUSTAR
+```
+
+### Valores a ajustar en la interfaz (`interfaz_grafica.py`):
+
+```python
+# Umbral de detección de pared
+wall_threshold = 100  # mm - AJUSTAR según sensores
+
+# IP y puerto
+ROBOT_IP = "192.168.1.XXX"  # IP del ESP32
+ROBOT_PORT = 12345
 ```
 
 ## Solución de Problemas
 
-### El programa no se conecta al ESP32
+### El robot no se conecta a WiFi
 
-- Verifica el puerto serial correcto
-- Asegúrate de que el ESP32 esté conectado
-- Cierra otras aplicaciones que usen el puerto (Arduino IDE, etc.)
-- En Linux, da permisos: `sudo chmod 666 /dev/ttyUSB0`
+- Verificar SSID y contraseña en `src/main.cpp`
+- Asegurar que la PC y el ESP32 están en la misma red
+- Verificar que el router permite comunicación entre dispositivos
+- Reiniciar el ESP32
 
-### La interfaz gráfica no se muestra
+### No se puede conectar desde la interfaz
 
-- Verifica que pygame esté instalado: `pip list | grep pygame`
-- Reinstala pygame: `pip install --upgrade pygame`
+- Verificar que la IP del robot sea correcta
+- Verificar firewall de la PC
+- Probar hacer ping al ESP32: `ping 192.168.1.XXX`
+- Verificar que el puerto UDP 12345 no esté bloqueado
 
-### Los sensores no responden
+### El robot gira incorrectamente
 
-- Verifica la implementación del protocolo en el ESP32
-- Usa el modo manual para probar comandos individuales
-- Revisa el monitor serial del ESP32
+- Ajustar los valores de `delay()` en las funciones de giro
+- Verificar que los motores estén conectados correctamente
+- Calibrar velocidad de giro `TURN_SPEED`
+
+### Los sensores no detectan paredes
+
+- Verificar conexiones del multiplexor TCA9548A
+- Ajustar `wall_threshold` en la interfaz
+- Verificar canales del multiplexor (3=frontal, 1=izquierdo, 2=derecho)
+- Verificar alimentación de los sensores
+
+### La interfaz no se abre
+
+- Verificar que tkinter esté instalado (viene con Python)
+- En Linux: `sudo apt-get install python3-tk`
+- Verificar versión de Python >= 3.8
 
 ## Personalización
 
 ### Cambiar dimensiones del laberinto
 
-En `flood_fill.py`:
+En `interfaz_grafica.py`:
 ```python
-self.flood_fill = FloodFill(filas=7, columnas=12)  # Ajustar valores
+MAZE_SIZE = 16  # Cambiar tamaño
+TARGET_X, TARGET_Y = 7, 7  # Cambiar posición de meta
 ```
 
 ### Ajustar umbral de detección de paredes
 
-En `flood_fill.py` en el método `detectar_paredes_desde_sensores()`:
+En `interfaz_grafica.py` en la clase `FloodFill`:
 ```python
-umbral_pared = 120  # mm - ajustar según calibración
+wall_threshold = 100  # mm - ajustar según calibración
 ```
 
 ### Cambiar tamaño de celdas en interfaz
 
-En `main_control.py`:
+En `interfaz_grafica.py`:
 ```python
-self.interfaz = InterfazLaberinto(self.flood_fill, tamano_celda=80)  # píxeles
+CELL_SIZE = 40  # píxeles - ajustar para zoom
 ```
+
+## Características Principales
+
+### 🎮 Interfaz Intuitiva
+- Tema oscuro moderno
+- Visualización en tiempo real
+- Controles accesibles
+- Log detallado de eventos
+
+### 🤖 Control Inteligente
+- Algoritmo Flood Fill optimizado
+- Ejecución no bloqueante con FreeRTOS
+- Detección automática de paredes
+- Navegación autónoma
+
+### 📡 Comunicación WiFi
+- Protocolo UDP de baja latencia
+- Sin cables ni conexiones físicas
+- Respuestas en tiempo real
+- Sistema de reconexión automática
 
 ## Referencias
 
-- [Flood Fill Algorithm](https://www.micromouseonline.com/2017/02/04/maze-solving-flooding-algorithm/)
+- [Flood Fill Algorithm - Micromouse Online](https://www.micromouseonline.com/2017/02/04/maze-solving-flooding-algorithm/)
 - [Micromouse Design](https://www.micromouseonline.com/)
+- [FreeRTOS Documentation](https://www.freertos.org/documentation/)
 
-## Autor
+## Licencia
 
-Proyecto Micromouse - 2025
+Proyecto educativo para competencia de Micromouse - 2025
+
+---
+
+**¡Buena suerte en la competencia! 🏆**
