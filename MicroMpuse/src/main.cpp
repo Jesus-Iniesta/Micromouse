@@ -37,6 +37,13 @@ const float Kp_enc = 0.5;
 const int MAX_CORR = 60;
 const int BASE_SPEED = 120;
 const int MIN_PWM = 60;
+const int DEADZONE = 5; // Zona muerta para evitar micro-ajustes
+
+// Variables de estado para suavizado
+float lastCorrection = 0.0;
+int consecutiveWallLeft = 0;
+int consecutiveWallRight = 0;
+int consecutiveNoWalls = 0;
 
 // Geometría y Odometría
 const float WHEEL_DIAMETER = 43.5; 
@@ -190,6 +197,12 @@ void moveForward() {
   long targetTicks = TICKS_CELL;
   isBusy = true;
   
+  // Reiniciar contadores de estado
+  consecutiveWallLeft = 0;
+  consecutiveWallRight = 0;
+  consecutiveNoWalls = 0;
+  lastCorrection = 0.0;
+  
   while(isBusy) {
     checkUDPWhileMoving();
     if (!isBusy) break; 
@@ -206,25 +219,70 @@ void moveForward() {
     if(f < 60 && f > 0) break; // Pared enfrente
     if(currentDist >= targetTicks) break;
 
-    // PID
+    // Detección de paredes con histéresis (evita cambios bruscos)
     bool wallLeft = (l < WALL_THRESHOLD);
     bool wallRight = (r < WALL_THRESHOLD);
+    
+    // Actualizar contadores de estado consecutivo
+    if (wallLeft) consecutiveWallLeft++; else consecutiveWallLeft = 0;
+    if (wallRight) consecutiveWallRight++; else consecutiveWallRight = 0;
+    if (!wallLeft && !wallRight) consecutiveNoWalls++; else consecutiveNoWalls = 0;
+    
+    // Solo considerar paredes estables (al menos 3 lecturas consecutivas)
+    bool stableWallLeft = (consecutiveWallLeft >= 3);
+    bool stableWallRight = (consecutiveWallRight >= 3);
+    
     float correction = 0;
+    float alpha = 0.7; // Factor de suavizado (0.7 = 70% nuevo, 30% anterior)
 
-    if (wallLeft && wallRight) {
-      correction = (l - r) * Kp_wall;
-    } else if (wallLeft) {
-      correction = (l - WALL_TARGET) * Kp_wall;
-    } else if (wallRight) {
-      correction = -(r - WALL_TARGET) * Kp_wall;
+    // Estrategia de control mejorada
+    if (stableWallLeft && stableWallRight) {
+      // CASO 1: Ambas paredes detectadas - Centrar entre ellas
+      int diff = l - r;
+      if (abs(diff) > DEADZONE) {
+        correction = diff * Kp_wall;
+      } else {
+        correction = 0; // Dentro de zona muerta, mantener curso
+      }
+    } else if (stableWallLeft && !stableWallRight) {
+      // CASO 2: Solo pared izquierda - Mantener distancia constante
+      int error = l - WALL_TARGET;
+      if (abs(error) > DEADZONE) {
+        correction = error * Kp_wall;
+      } else {
+        correction = 0;
+      }
+    } else if (!stableWallLeft && stableWallRight) {
+      // CASO 3: Solo pared derecha - Mantener distancia constante
+      int error = r - WALL_TARGET;
+      if (abs(error) > DEADZONE) {
+        correction = -error * Kp_wall;
+      } else {
+        correction = 0;
+      }
+    } else if (consecutiveNoWalls >= 5) {
+      // CASO 4: Sin paredes estables - Usar encoders para mantener línea recta
+      // Solo después de 5 lecturas consecutivas sin paredes
+      long encDiff = countsL - countsR;
+      if (abs(encDiff) > 10) {
+        correction = -encDiff * Kp_enc;
+      } else {
+        correction = 0;
+      }
     } else {
-      correction = -(countsL - countsR) * Kp_enc;
+      // CASO 5: Transición - Mantener la última corrección suavizada
+      correction = lastCorrection * 0.5; // Reducir corrección gradualmente
     }
 
+    // Suavizado de la corrección (evita cambios bruscos)
+    correction = alpha * correction + (1.0 - alpha) * lastCorrection;
     correction = constrain(correction, -MAX_CORR, MAX_CORR);
+    lastCorrection = correction;
+    
     int speedL = BASE_SPEED - correction;
     int speedR = BASE_SPEED + correction;
     
+    // Desaceleración suave al final
     if ((targetTicks - currentDist) < 300) {
        speedL = map(targetTicks - currentDist, 0, 300, MIN_PWM, speedL);
        speedR = map(targetTicks - currentDist, 0, 300, MIN_PWM, speedR);

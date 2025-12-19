@@ -159,21 +159,28 @@ class FloodFillSolver:
                     return True # Meta encontrada
         return False
 
-    def get_next_move(self, rx, ry, facing):
-        # Buscar vecino accesible con menor distancia
-        best_dist = 999
-        best_move = None
+    def get_next_move(self, rx, ry, facing, exploration_mode=True):
+        """
+        Algoritmo de decisión mejorado que evalúa múltiples factores:
+        1. Distancia flood-fill (prioridad base)
+        2. Si la celda ha sido visitada (exploración)
+        3. Costo de giro (preferir avanzar al frente)
+        4. Número de celdas adyacentes sin explorar (potencial)
+        5. Evitar callejones sin salida conocidos
+        """
         
-        # Movimientos posibles: (nuevo_facing, comando_robot)
+        # Movimientos posibles: (nuevo_facing, comando_robot, costo_giro)
         moves = [
-            (facing, 'FORWARD'),
-            ((facing - 1) % 4, 'TURNL'),
-            ((facing + 1) % 4, 'TURNR'),
-            ((facing + 2) % 4, 'TURNU')
+            (facing, 'FORWARD', 0),                  # Sin giro
+            ((facing - 1) % 4, 'TURNL', 1),          # Giro izquierda
+            ((facing + 1) % 4, 'TURNR', 1),          # Giro derecha
+            ((facing + 2) % 4, 'TURNU', 2)           # Media vuelta
         ]
         
-        for new_face, cmd in moves:
-            # Coordenadas a las que llegariamos
+        candidates = []  # Lista de opciones válidas con sus puntuaciones
+        
+        for new_face, cmd, turn_cost in moves:
+            # Coordenadas a las que llegaríamos
             dx, dy = [(0,1), (1,0), (0,-1), (-1,0)][new_face]
             nx, ny = rx+dx, ry+dy
             
@@ -182,16 +189,190 @@ class FloodFillSolver:
                 # Verificar pared
                 wall_dir = ['N', 'E', 'S', 'W'][new_face]
                 if not self.maze[rx][ry].walls[wall_dir]:
-                    dist = self.maze[nx][ny].distance
-                    # Preferir casillas no visitadas para explorar
-                    if not self.maze[nx][ny].visited:
-                        dist -= 0.5 
+                    cell = self.maze[nx][ny]
+                    
+                    # ===== SISTEMA DE PUNTUACIÓN =====
+                    score = 0.0
+                    
+                    # 1. Distancia flood-fill (factor más importante)
+                    #    Menor distancia = mejor puntuación
+                    score -= cell.distance * 100  # Peso: 100
+                    
+                    # 2. Preferencia por celdas no visitadas (solo en exploración)
+                    if exploration_mode:
+                        if not cell.visited:
+                            score += 150  # Bonus grande por explorar nuevo territorio
                         
-                    if dist < best_dist:
-                        best_dist = dist
-                        best_move = cmd
-                        
-        return best_move
+                        # Bonus adicional: contar vecinos sin explorar de la celda destino
+                        unexplored_neighbors = self.count_unexplored_neighbors(nx, ny)
+                        score += unexplored_neighbors * 30  # Bonus por potencial de exploración
+                    
+                    # 3. Preferir avanzar al frente (minimizar giros)
+                    #    Menos giros = más eficiencia
+                    score -= turn_cost * 20  # Penalización por girar
+                    
+                    # 4. Evitar callejones sin salida conocidos
+                    #    Si una celda solo tiene 1 salida y ya fue visitada, penalizar
+                    if cell.visited and exploration_mode:
+                        exits = self.count_exits(nx, ny)
+                        if exits <= 1:
+                            score -= 50  # Penalización por callejón sin salida
+                    
+                    # 5. En modo retorno, priorizar ruta directa
+                    if not exploration_mode:
+                        # Penalizar menos los giros en modo retorno para ser más directo
+                        score += turn_cost * 10  # Reducir penalización de giros
+                    
+                    # Guardar candidato con su puntuación
+                    candidates.append({
+                        'command': cmd,
+                        'score': score,
+                        'distance': cell.distance,
+                        'visited': cell.visited,
+                        'turn_cost': turn_cost,
+                        'position': (nx, ny)
+                    })
+        
+        # Si no hay candidatos, no hay movimiento posible
+        if not candidates:
+            return None
+        
+        # Ordenar candidatos por puntuación (mayor es mejor)
+        candidates.sort(key=lambda x: x['score'], reverse=True)
+        
+        # Retornar el mejor movimiento
+        best = candidates[0]
+        
+        # Debug: mostrar las opciones evaluadas (comentar en producción)
+        # print(f"\n=== Decisión en ({rx},{ry}) orientación {DIRS[facing]} ===")
+        # for i, c in enumerate(candidates[:3]):  # Mostrar top 3
+        #     print(f"{i+1}. {c['command']}: score={c['score']:.1f}, dist={c['distance']}, "
+        #           f"visited={c['visited']}, turns={c['turn_cost']}")
+        
+        return best['command']
+    
+    def count_unexplored_neighbors(self, x, y):
+        """Cuenta cuántos vecinos adyacentes no han sido explorados"""
+        count = 0
+        neighbors = [
+            (0, 1, 'N'), (1, 0, 'E'), (0, -1, 'S'), (-1, 0, 'W')
+        ]
+        for dx, dy, wall_dir in neighbors:
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < MAZE_COLS and 0 <= ny < MAZE_ROWS:
+                # Solo contar si es accesible (sin pared) y no visitado
+                if not self.maze[x][y].walls[wall_dir] and not self.maze[nx][ny].visited:
+                    count += 1
+        return count
+    
+    def count_exits(self, x, y):
+        """Cuenta cuántas salidas tiene una celda"""
+        count = 0
+        for wall_dir in ['N', 'E', 'S', 'W']:
+            if not self.maze[x][y].walls[wall_dir]:
+                count += 1
+        return count
+    
+    def calculate_optimal_path(self, start_x, start_y, start_facing):
+        """
+        Calcula la ruta óptima desde (start_x, start_y) hasta la meta.
+        Retorna una lista de comandos que el robot debe ejecutar.
+        """
+        path = []
+        x, y = start_x, start_y
+        facing = start_facing
+        
+        # Seguir el gradiente de distancia hasta llegar a la meta (distancia 0)
+        visited_positions = set()
+        max_steps = MAZE_COLS * MAZE_ROWS * 2  # Límite de seguridad
+        steps = 0
+        
+        while self.maze[x][y].distance > 0 and steps < max_steps:
+            if (x, y) in visited_positions:
+                # Evitar loops infinitos
+                break
+            visited_positions.add((x, y))
+            steps += 1
+            
+            # Buscar el mejor vecino (menor distancia)
+            best_neighbor = None
+            best_dist = 999
+            best_direction = None
+            
+            neighbors = [
+                (0, 1, 'N', 0),   # Norte
+                (1, 0, 'E', 1),   # Este
+                (0, -1, 'S', 2),  # Sur
+                (-1, 0, 'W', 3)   # Oeste
+            ]
+            
+            for dx, dy, wall_name, direction in neighbors:
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < MAZE_COLS and 0 <= ny < MAZE_ROWS:
+                    # Verificar que no haya pared
+                    if not self.maze[x][y].walls[wall_name]:
+                        if self.maze[nx][ny].distance < best_dist:
+                            best_dist = self.maze[nx][ny].distance
+                            best_neighbor = (nx, ny)
+                            best_direction = direction
+            
+            if best_neighbor is None:
+                # No hay camino disponible
+                break
+            
+            # Calcular los comandos necesarios para moverse a esa celda
+            target_direction = best_direction
+            
+            # Primero girar a la dirección correcta
+            turn_diff = (target_direction - facing) % 4
+            if turn_diff == 1:
+                path.append('TURNR')
+                facing = target_direction
+            elif turn_diff == 2:
+                path.append('TURNU')
+                facing = target_direction
+            elif turn_diff == 3:
+                path.append('TURNL')
+                facing = target_direction
+            # Si turn_diff == 0, ya estamos orientados correctamente
+            
+            # Luego avanzar
+            path.append('FORWARD')
+            x, y = best_neighbor
+        
+        return path
+    
+    def update_distances_from_start(self):
+        """
+        Actualiza las distancias desde la posición inicial (0,0) hacia la meta.
+        Útil para calcular la ruta de regreso desde la meta.
+        """
+        # Reiniciar distancias
+        for col in self.maze:
+            for cell in col:
+                cell.distance = 999
+        
+        # BFS desde (0,0)
+        queue_bfs = deque()
+        self.maze[0][0].distance = 0
+        queue_bfs.append((0, 0))
+        
+        while queue_bfs:
+            x, y = queue_bfs.popleft()
+            current_dist = self.maze[x][y].distance
+            
+            neighbors = [
+                (0, 1, 'N', 'S'), (1, 0, 'E', 'W'), 
+                (0, -1, 'S', 'N'), (-1, 0, 'W', 'E')
+            ]
+            
+            for dx, dy, wall, opp in neighbors:
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < MAZE_COLS and 0 <= ny < MAZE_ROWS:
+                    if not self.maze[x][y].walls[wall]:
+                        if self.maze[nx][ny].distance > current_dist + 1:
+                            self.maze[nx][ny].distance = current_dist + 1
+                            queue_bfs.append((nx, ny))
 
 class MicromouseApp:
     def __init__(self, root):
@@ -216,6 +397,11 @@ class MicromouseApp:
         self.ry = 0
         self.facing = NORTH # 0=N
         self.solver = FloodFillSolver()
+        
+        # Estado de ejecución
+        self.exploration_phase = True  # True = exploración, False = ejecución óptima
+        self.goal_found = False
+        self.optimal_path = []  # Almacena la ruta óptima calculada
         
         # Sensores (valores actuales)
         self.sensor_front = 0
@@ -665,6 +851,11 @@ class MicromouseApp:
         # Recrear el solver (limpia el mapa)
         self.solver = FloodFillSolver()
         
+        # Reiniciar estado de ejecución
+        self.exploration_phase = True
+        self.goal_found = False
+        self.optimal_path = []
+        
         # Limpiar display de sensores
         self.sensor_front_label.config(text="---", fg='#2ecc71')
         self.sensor_left_label.config(text="---", fg='#2ecc71')
@@ -1012,26 +1203,76 @@ class MicromouseApp:
             self.log(f"Mapa actualizado en ({self.rx}, {self.ry})", "INFO")
             
             # --- DETECCIÓN DE META DINÁMICA ---
-            if self.solver.check_center_found():
+            if self.exploration_phase and self.solver.check_center_found():
                 self.log("===================", "SUCCESS")
                 self.log("🏆 ¡META (4 CASILLAS) ENCONTRADA!", "SUCCESS")
-                self.log(f"Total de pasos: {step_count}", "SUCCESS")
+                self.log(f"Total de pasos exploración: {step_count}", "SUCCESS")
                 self.log("===================", "SUCCESS")
                 self.root.after(0, self.draw_maze)
+                
+                # Cambiar a fase de retorno
+                self.goal_found = True
+                self.exploration_phase = False
+                
+                self.log("🔄 INICIANDO RETORNO AL INICIO...", "INFO")
+                self.log("Calculando ruta óptima de regreso...", "INFO")
+                
+                # Actualizar distancias desde la posición inicial
+                self.solver.update_distances_from_start()
+                self.root.after(0, self.draw_maze)
+                
+                # Continuar el loop para retornar al inicio
+                time.sleep(1)
+                continue
+            # ----------------------------------
+            
+            # --- DETECCIÓN DE RETORNO AL INICIO ---
+            if not self.exploration_phase and self.rx == 0 and self.ry == 0:
+                self.log("===================", "SUCCESS")
+                self.log("🏠 ¡RETORNO AL INICIO COMPLETADO!", "SUCCESS")
+                self.log("===================", "SUCCESS")
+                
+                # Recalcular distancias hacia la meta
+                self.solver.update_distances()
+                
+                # Calcular la ruta óptima
+                self.log("🧠 CALCULANDO RUTA ÓPTIMA...", "INFO")
+                self.optimal_path = self.solver.calculate_optimal_path(self.rx, self.ry, self.facing)
+                
+                self.log(f"✅ Ruta óptima calculada: {len(self.optimal_path)} comandos", "SUCCESS")
+                self.log(f"📋 Comandos: {' → '.join(self.optimal_path[:20])}{'...' if len(self.optimal_path) > 20 else ''}", "INFO")
+                
+                # Preguntar al usuario si desea ejecutar la ruta óptima
+                self.root.after(0, self.draw_maze)
+                response = messagebox.askyesno(
+                    "Ruta Óptima Calculada",
+                    f"¡El robot ha regresado al inicio!\n\n" +
+                    f"Ruta óptima: {len(self.optimal_path)} comandos\n\n" +
+                    f"¿Deseas ejecutar la ruta óptima ahora?"
+                )
+                
+                if response:
+                    self.log("===================", "SUCCESS")
+                    self.log("🚀 EJECUTANDO RUTA ÓPTIMA", "SUCCESS")
+                    self.log("===================", "SUCCESS")
+                    self.execute_optimal_path()
+                else:
+                    self.log("Ejecución de ruta óptima cancelada por el usuario", "INFO")
+                
                 self.running = False
                 self.send_cmd("STOP")
                 self.root.after(0, lambda: self.btn_start.config(state=tk.NORMAL, bg='#27ae60'))
-                messagebox.showinfo("¡Éxito!", f"Meta encontrada en {step_count} pasos")
                 break
             # ----------------------------------
             
             self.root.after(0, self.draw_maze) # Actualizar GUI
 
             # 4. Calcular Siguiente Movimiento
-            move = self.solver.get_next_move(self.rx, self.ry, self.facing)
+            move = self.solver.get_next_move(self.rx, self.ry, self.facing, exploration_mode=self.exploration_phase)
             
             if not move:
-                self.log("Sin salida disponible - Fin de exploración", "ERROR")
+                phase_name = "exploración" if self.exploration_phase else "retorno"
+                self.log(f"Sin salida disponible - Fin de {phase_name}", "ERROR")
                 self.running = False
                 self.root.after(0, lambda: self.btn_start.config(state=tk.NORMAL, bg='#27ae60'))
                 break
@@ -1082,6 +1323,82 @@ class MicromouseApp:
         
         self.log("Algoritmo finalizado", "INFO")
         self.root.after(0, lambda: self.update_command_display("Ninguno"))
+    
+    def execute_optimal_path(self):
+        """
+        Ejecuta la ruta óptima calculada previamente.
+        """
+        if not self.optimal_path:
+            self.log("❌ No hay ruta óptima calculada", "ERROR")
+            return
+        
+        total_commands = len(self.optimal_path)
+        
+        for idx, command in enumerate(self.optimal_path, 1):
+            if not self.running:
+                self.log("⏹️ Ejecución de ruta óptima detenida", "WARNING")
+                return
+            
+            # Traducir comando a español
+            commands_spanish = {
+                "FORWARD": "Avanza",
+                "TURNL": "Gira Izquierda",
+                "TURNR": "Gira Derecha",
+                "TURNU": "Media Vuelta"
+            }
+            
+            self.log(f"[{idx}/{total_commands}] {commands_spanish.get(command, command)}", "COMMAND")
+            self.root.after(0, lambda c=command: self.update_command_display(c))
+            
+            # Enviar comando
+            ack = self.send_cmd(command)
+            if ack != "ACK":
+                self.log(f"❌ Error en ACK: {ack}", "ERROR")
+                self.log("⏹️ Ejecución de ruta óptima abortada", "ERROR")
+                return
+            
+            self.log("ACK recibido ✓", "INFO")
+            
+            # Esperar a que termine
+            while True:
+                time.sleep(0.2)
+                status = self.send_cmd("STATUS")
+                if status and status.startswith("IDLE"):
+                    self.log("Movimiento completado", "INFO")
+                    break
+            
+            # Actualizar posición virtual
+            if command == "FORWARD":
+                dx, dy = [(0,1), (1,0), (0,-1), (-1,0)][self.facing]
+                old_x, old_y = self.rx, self.ry
+                self.rx += dx
+                self.ry += dy
+                self.log(f"Posición: ({old_x},{old_y}) → ({self.rx},{self.ry})", "INFO")
+            elif command == "TURNL":
+                self.facing = (self.facing - 1) % 4
+                self.log(f"Orientación: {DIRS[self.facing]}", "INFO")
+            elif command == "TURNR":
+                self.facing = (self.facing + 1) % 4
+                self.log(f"Orientación: {DIRS[self.facing]}", "INFO")
+            elif command == "TURNU":
+                self.facing = (self.facing + 2) % 4
+                self.log(f"Orientación: {DIRS[self.facing]}", "INFO")
+            
+            self.root.after(0, self.draw_maze)
+            time.sleep(0.2)
+        
+        self.log("===================", "SUCCESS")
+        self.log("🎉 ¡RUTA ÓPTIMA COMPLETADA!", "SUCCESS")
+        self.log(f"Total de comandos ejecutados: {total_commands}", "SUCCESS")
+        self.log(f"Posición final: ({self.rx}, {self.ry})", "SUCCESS")
+        self.log("===================", "SUCCESS")
+        
+        messagebox.showinfo(
+            "¡Éxito Total!",
+            f"Ruta óptima completada exitosamente\n\n" +
+            f"Comandos ejecutados: {total_commands}\n" +
+            f"Posición final: ({self.rx}, {self.ry})"
+        )
 
 # ====== EJECUCIÓN PRINCIPAL ======
 if __name__ == "__main__":
