@@ -8,8 +8,8 @@
 #include <algorithm> // Para el filtro de mediana
 
 // ====== 1. CONFIGURACIÓN DE RED ======
-#define STASSID "TU_WIFI"      
-#define STAPSK  "TU_PASSWORD"  
+#define STASSID "robotica"      
+#define STAPSK  "robotica2025"  
 #define UDP_PORT 12345
 
 // ====== 2. HARDWARE Y SENSORES ======
@@ -50,13 +50,13 @@ const float TICKS_TURN_90 = (PI * WHEEL_TRACK * 0.25) * TICKS_PER_MM;
 const float TICKS_TURN_180 = TICKS_TURN_90 * 2.0;
 
 // Pines
-#define ENC_L_A 34
-#define ENC_L_B 35
-#define ENC_R_A 32
-#define ENC_R_B 33
+#define ENC_L_A 26
+#define ENC_L_B 25
+#define ENC_R_A 27
+#define ENC_R_B 14
 
-const int AIN1 = 27; const int AIN2 = 26; const int PWMA = 18;
-const int BIN1 = 25; const int BIN2 = 14; const int PWMB = 19;
+const int AIN1 = 32; const int AIN2 = 33 ; const int PWMA = 18;
+const int BIN1 = 23; const int BIN2 = 5; const int PWMB = 19;
 const int STBY = 16;
 
 class SimpleMotor {
